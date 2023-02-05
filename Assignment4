@@ -1,0 +1,127 @@
+qn1:- for voting and result pods, Observe that NodePort is assigned.
+obs:- only result and vote pod were assigned with nodeport while other were assigne with simple service this is bcz result/vote app need to be accessed from internet. Also, different cluster IP were allocated to result and vote pod alog with different port(5000,5001) by the nodeport.
+    *************************************************************************************
+          [root@ip-172-31-10-253 ~]# kubectl get svc
+          NAME         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+          db           ClusterIP   10.99.110.34    <none>        5432/TCP         54m
+          kubernetes   ClusterIP   10.96.0.1       <none>        443/TCP          55m
+          redis        ClusterIP   10.107.87.98    <none>        6379/TCP         54m
+          result       NodePort    10.101.100.76   <none>        5001:31003/TCP   54m
+          vote         NodePort    10.97.177.10    <none>        5000:31002/TCP   54m
+          [root@ip-172-31-10-253 ~]# 
+    ******************************************************************************************
+    
+_________________________________________________________________________________________________________________________________________   
+qn2:- try voting and see the results paralelly in results page.
+obs2:- once all pods are up nd running, as soon as we give any voting input in vote_web page instantly result_web page changes accordingly.
+
+
+________________________________________________________________________________________________________________________________________---
+qn3:- when vote pod was deleted:-
+obs:- 
+1-as soon as the pod was deleted, front end was not able to take any input(vote) for 1-2 sec around afterwhich it was working fine. this is probably the delay in which already existing pod was getting terminated and new pod was coming up.
+2-as soon as pod is terminated another pod was coming to take place of it and the ip allocated to the new pod was automatically getting updated in the endpoint.
+3-=>this was happening because replica==1 set in the vote-deployment.yaml.
+
+______________________________________________________________________________________________________________________________________________
+qn4:- when worker pod is deleted:-
+obs:-
+1-around 1-2 sec delay was notice between the voting_web and result_web.
+2-just once the old_worker pod was deleted new_worker pod was coming up to take its place, this is also because it was deployed with replica=1.
+
+
+
+___________________________________________________________________________________________________________________________________________________
+qn5:-	when db pod was deleted:-
+obs:-
+1- When DB pod was deleted, result_web lost his older data, due to this  result app only showed newly entered voting data.
+2- Reason:- DB_pod was mounted with emptydir inside the Pod volume, due to which once the db_pod is deleted older data is also lost.
+
+
+____________________________________________________________________________________________________________________________________________________
+qn6:- Solution Applied to make the application work:-
+Soln:- 
+hostpath was added in the db-deployment.yaml to store tha data outside the pod so that deleting db_pod will not affect in lost in data. Below details were added in yaml file:-
+
+					apiVersion: apps/v1
+					kind: Deployment
+					metadata:
+					  name: db
+					spec:
+					  replicas: 1
+					  selector:
+						matchLabels:
+						  app: db
+					  template:
+						metadata:
+						  labels
+							app: db
+						spec:
+						  containers:
+						  - image: postgres:9.3
+							name: db
+							volumeMounts:
+							- mountPath: /var/lib/postgresql/data
+							  name: db-data
+						  volumes:
+						  - name: db-data
+							hostPath:
+							  path: /tmp/db-data
+___________________________________________________________________________________________________________________________
+
+
+
+**************************** other observations *************************
+		
+=> when db pod delete command was run, an extra db_pod just started to come_up to take place of older db_Pod, at this point 2 db pods are present and take a note of the ready, status  and restarts data of result_pod and worker_pod, both pods have restarts=6.
+				*****************************************************************************
+						[root@ip-172-31-10-253 example-voting-app]# kubectl get po
+						NAME                      READY   STATUS        RESTARTS   AGE
+						db-b54cd94f4-99624        1/1     Running       0          4s
+						db-b54cd94f4-q2grc        1/1     Terminating   0          2m20s
+						redis-868d64d78-lvfvf     1/1     Running       0          4h28m
+						result-5d57b59f4b-xgjnw   1/1     Running       6          4h28m
+						vote-94849dc97-8j8b5      1/1     Running       0          86m
+						worker-dd46d7584-2g769    1/1     Running       6          71m
+				********************************************************************************
+			 
+	after few seconds:-
+				********************************************************************************
+						[root@ip-172-31-10-253 example-voting-app]# kubectl get po
+						NAME                      READY   STATUS        RESTARTS   AGE
+						db-b54cd94f4-99624        1/1     Running       0          31s
+						db-b54cd94f4-q2grc        0/1     Terminating   0          2m47s
+						redis-868d64d78-lvfvf     1/1     Running       0          4h28m
+						result-5d57b59f4b-xgjnw   0/1     Error         6          4h28m
+						vote-94849dc97-8j8b5      1/1     Running       0          86m
+						worker-dd46d7584-2g769    0/1     Error         6          71m
+				***********************************************************************************
+worker and result pod status changes to Error and restart is still equal to 6. this is happening because the older db pod had its unique_dynamic_ip and the worker pod and result pod was connected to same older_db pod ip. So once the pod is deleted, the ip allocated to it also got vanished and hence at that moment worker pod and result pod status was changed to error beacuse db_pod and result_pod/worker_pod went out of sync at this moment.
+				
+        
+after few more seconds:-
+				*****************************************************************************************
+							[root@ip-172-31-10-253 example-voting-app]# kubectl get po
+							NAME                      READY   STATUS             RESTARTS   AGE
+							db-b54cd94f4-99624        1/1     Running            0          43s
+							redis-868d64d78-lvfvf     1/1     Running            0          4h28m
+							result-5d57b59f4b-xgjnw   0/1     CrashLoopBackOff   6          4h28m
+							vote-94849dc97-8j8b5      1/1     Running            0          86m
+							worker-dd46d7584-2g769    0/1     Error              6          71m
+							[root@ip-172-31-10-253 example-voting-app]# kubectl get po
+							NAME                      READY   STATUS             RESTARTS   AGE
+							db-b54cd94f4-99624        1/1     Running            0          44s
+							redis-868d64d78-lvfvf     1/1     Running            0          4h28m
+							result-5d57b59f4b-xgjnw   1/1     Running            7          4h28m
+							vote-94849dc97-8j8b5      1/1     Running            0          87m
+							worker-dd46d7584-2g769    0/1     CrashLoopBackOff   6          71m
+							[root@ip-172-31-10-253 example-voting-app]# kubectl get po
+							NAME                      READY   STATUS    RESTARTS   AGE
+							db-b54cd94f4-99624        1/1     Running   0          48s
+							redis-868d64d78-lvfvf     1/1     Running   0          4h29m
+							result-5d57b59f4b-xgjnw   1/1     Running   7          4h29m
+							vote-94849dc97-8j8b5      1/1     Running   0          87m
+							worker-dd46d7584-2g769    1/1     Running   7          71m
+				************************************************************************************
+here first result_pod/worker_pod status changed to CrashLoopBackOff and than both pods restart status changed from 6 to 7 while status changed to Running from CrashLoopBackOff. this indicates these two pods restarted once new db pod was availble to sync with new ip and to make it sync it restarted both the pods and hence status changed to Running.
+_______________________________________________________________________________________________________________________________________________
